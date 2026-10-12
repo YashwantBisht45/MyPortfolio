@@ -22,7 +22,7 @@ export const portfolioData = {
   // Personal & Academic Identity
   developerInfo: {
     name: "Yashwant Singh",
-    initials: "YB",
+    initials: "YS",
     role: "Aspiring Software Development Engineer",
     academicStatus: "Third-Year B.Tech. CSE Student (2024–2028)",
     institution: "ABES Engineering College, Ghaziabad",
@@ -109,7 +109,7 @@ export const portfolioData = {
     },
     {
       category: "CS Fundamentals & Practices",
-      skills: ["Data Structures & Algorithms (DSA)", "Object-Oriented Programming (OOP)", "Database Management (DBMS)", "Computer Networks", "Git & GitHub"]
+      skills: ["Data Structures & Algorithms (DSA)", "Object-Oriented Programming (OOP)", "Database Management (DBMS)", "Theory Of Computation (TOC)","Operating System (OS)", "Git & GitHub"]
     }
   ],
 
@@ -145,7 +145,7 @@ export const portfolioData = {
         "Data Structures & Algorithms",
         "Operating Systems",
         "Database Management Systems",
-        "Computer Networks",
+        "Theory Of Computation (TOC)",
         "Object-Oriented Programming",
         "Design & Analysis of Algorithms"
       ]
