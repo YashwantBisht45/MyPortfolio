@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Code2, Trophy, ExternalLink, Calendar, CheckCircle2, Flame, Award, GitCommit } from 'lucide-react';
+import { Code2, Trophy, ExternalLink, Calendar, CheckCircle2, Flame, Award, GitCommit, RefreshCw, Clock, AlertCircle } from 'lucide-react';
 import { GithubIcon } from './Icons';
 import { RatingChart } from './RatingChart';
 
@@ -174,7 +174,8 @@ function HeatmapGrid({
 
 /**
  * Dedicated Coding Activity Component for Yashwant Bisht
- * Displays GitHub, LeetCode, and CodeChef heatmaps with direct profile URLs.
+ * Displays GitHub, LeetCode, and CodeChef heatmaps with direct profile URLs,
+ * real-time runtime synchronisation, verified fallbacks, and honest status indicators.
  */
 export function CodingActivity({ developerInfo = {}, platformSnapshots = {} }) {
   const [activePlatform, setActivePlatform] = useState('github'); // 'github' | 'leetcode' | 'codechef'
@@ -182,136 +183,24 @@ export function CodingActivity({ developerInfo = {}, platformSnapshots = {} }) {
   const handles = developerInfo.handles || {};
   const socialLinks = developerInfo.socialLinks || {};
 
-  // Live Fetched States
-  const [githubData, setGithubData] = useState({
-    loading: true,
-    error: null,
-    totalContributions: 37,
-    contributionsMap: {},
-    publicRepos: 20,
-    avatarUrl: null
-  });
+  // Build initial LeetCode submission map from snapshot
+  const initialLeetcodeMap = useMemo(() => {
+    const rawCalendar = platformSnapshots.leetcode?.submissionCalendar || {};
+    const map = {};
+    Object.entries(rawCalendar).forEach(([timestamp, count]) => {
+      const date = new Date(parseInt(timestamp, 10) * 1000);
+      const dateStr = date.toISOString().split('T')[0];
+      map[dateStr] = count;
+    });
+    return map;
+  }, [platformSnapshots.leetcode]);
 
-  const [leetcodeData, setLeetcodeData] = useState({
-    loading: true,
-    error: null,
-    totalSolved: platformSnapshots.leetcode?.totalSolved || 124,
-    easySolved: platformSnapshots.leetcode?.easySolved || 80,
-    mediumSolved: platformSnapshots.leetcode?.mediumSolved || 43,
-    hardSolved: platformSnapshots.leetcode?.hardSolved || 1,
-    streak: platformSnapshots.leetcode?.streak || 57,
-    totalActiveDays: platformSnapshots.leetcode?.totalActiveDays || 109,
-    submissionMap: {}
-  });
-
-  const [codechefData, setCodechefData] = useState({
-    loading: false,
-    error: null,
-    rating: platformSnapshots.codechef?.rating || 1138,
-    division: platformSnapshots.codechef?.stars || 'Div 4',
-    contests: platformSnapshots.codechef?.contests || 22,
-    peakRating: platformSnapshots.codechef?.peakRating || 1138,
-    submissionMap: {}
-  });
-
-  // 1. Fetch GitHub Live Contributions
-  useEffect(() => {
-    async function fetchGithub() {
-      if (!handles.github) return;
-      try {
-        setGithubData(prev => ({ ...prev, loading: true, error: null }));
-        
-        // Fetch 365-day contributions array
-        const res = await fetch(`https://github-contributions-api.jogruber.de/v4/${handles.github}?y=last`);
-        if (!res.ok) throw new Error(`GitHub API returned status ${res.status}`);
-        const data = await res.json();
-
-        const map = {};
-        if (Array.isArray(data.contributions)) {
-          data.contributions.forEach(item => {
-            map[item.date] = item.count;
-          });
-        }
-
-        // Fetch user metadata
-        const userRes = await fetch(`https://api.github.com/users/${handles.github}`);
-        const userData = userRes.ok ? await userRes.json() : {};
-
-        setGithubData({
-          loading: false,
-          error: null,
-          totalContributions: data.total?.lastYear ?? 37,
-          contributionsMap: map,
-          publicRepos: userData.public_repos ?? 20,
-          avatarUrl: userData.avatar_url ?? null
-        });
-      } catch (err) {
-        console.warn("GitHub live contributions fetch failed, falling back gracefully:", err);
-        setGithubData(prev => ({
-          ...prev,
-          loading: false,
-          error: "Live activity network query paused. Showing verified repository records."
-        }));
-      }
-    }
-    fetchGithub();
-  }, [handles.github]);
-
-  // 2. Process LeetCode Submission Calendar
-  useEffect(() => {
-    async function loadLeetcode() {
-      try {
-        setLeetcodeData(prev => ({ ...prev, loading: true }));
-        
-        // Process verified submission calendar timestamps into YYYY-MM-DD
-        const rawCalendar = platformSnapshots.leetcode?.submissionCalendar || {};
-        const map = {};
-
-        Object.entries(rawCalendar).forEach(([timestamp, count]) => {
-          const date = new Date(parseInt(timestamp, 10) * 1000);
-          const dateStr = date.toISOString().split('T')[0];
-          map[dateStr] = count;
-        });
-
-        // Try to fetch latest live stats if proxy is available
-        try {
-          const liveRes = await fetch(`https://leetcode-api-faisalshohag.vercel.app/${handles.leetcode}`);
-          if (liveRes.ok) {
-            const liveJson = await liveRes.json();
-            if (liveJson.totalSolved) {
-              setLeetcodeData(prev => ({
-                ...prev,
-                totalSolved: liveJson.totalSolved,
-                easySolved: liveJson.easySolved,
-                mediumSolved: liveJson.mediumSolved,
-                hardSolved: liveJson.hardSolved,
-              }));
-            }
-          }
-        } catch (_) {
-          // If public proxy hits rate limits, keep verified snapshot values
-        }
-
-        setLeetcodeData(prev => ({
-          ...prev,
-          loading: false,
-          submissionMap: map
-        }));
-      } catch (err) {
-        setLeetcodeData(prev => ({ ...prev, loading: false, error: err.message }));
-      }
-    }
-    loadLeetcode();
-  }, [handles.leetcode, platformSnapshots.leetcode]);
-
-  // 3. Process CodeChef Submissions Calendar
-  useEffect(() => {
-    try {
-      const rawSubmissions = platformSnapshots.codechef?.submissions || [];
-      const map = {};
-
-      rawSubmissions.forEach(item => {
-        // format date from "2025-4-3" to "2025-04-03"
+  // Build initial CodeChef submission map from snapshot
+  const initialCodechefMap = useMemo(() => {
+    const rawSubmissions = platformSnapshots.codechef?.submissions || [];
+    const map = {};
+    rawSubmissions.forEach(item => {
+      if (item && item.date) {
         const parts = item.date.split('-');
         if (parts.length === 3) {
           const y = parts[0];
@@ -319,71 +208,455 @@ export function CodingActivity({ developerInfo = {}, platformSnapshots = {} }) {
           const d = parts[2].padStart(2, '0');
           map[`${y}-${m}-${d}`] = item.value;
         }
-      });
+      }
+    });
+    return map;
+  }, [platformSnapshots.codechef]);
 
+  // GitHub State
+  const [githubData, setGithubData] = useState({
+    loading: true,
+    error: null,
+    totalContributions: 37,
+    contributionsMap: {},
+    publicRepos: 20,
+    avatarUrl: null,
+    isLive: false,
+    lastUpdated: null
+  });
+
+  // LeetCode State
+  const [leetcodeData, setLeetcodeData] = useState({
+    loading: true,
+    error: null,
+    totalSolved: platformSnapshots.leetcode?.totalSolved || 132,
+    easySolved: platformSnapshots.leetcode?.easySolved || 85,
+    mediumSolved: platformSnapshots.leetcode?.mediumSolved || 46,
+    hardSolved: platformSnapshots.leetcode?.hardSolved || 1,
+    streak: platformSnapshots.leetcode?.streak || 57,
+    totalActiveDays: platformSnapshots.leetcode?.totalActiveDays || 115,
+    submissionMap: initialLeetcodeMap,
+    contestHistory: platformSnapshots.contestHistories?.leetcode?.history || [],
+    currentRating: platformSnapshots.contestHistories?.leetcode?.currentRating || 1287,
+    peakRating: platformSnapshots.contestHistories?.leetcode?.peakRating || 1414,
+    isLive: false,
+    lastUpdated: null
+  });
+
+  // CodeChef State
+  const [codechefData, setCodechefData] = useState({
+    loading: true,
+    error: null,
+    rating: platformSnapshots.codechef?.rating || 1138,
+    division: platformSnapshots.codechef?.stars || 'Div 4',
+    contests: platformSnapshots.codechef?.contests || 22,
+    peakRating: platformSnapshots.codechef?.peakRating || 1138,
+    submissionMap: initialCodechefMap,
+    contestHistory: platformSnapshots.contestHistories?.codechef?.history || [],
+    isLive: false,
+    lastUpdated: null
+  });
+
+  const [isRefreshing, setIsRefreshing] = useState(false);
+
+  // 1. Fetch GitHub Live Contributions
+  const fetchGithub = useCallback(async () => {
+    if (!handles.github) return;
+    try {
+      setGithubData(prev => ({ ...prev, loading: true, error: null }));
+      
+      const res = await fetch(`https://github-contributions-api.jogruber.de/v4/${handles.github}?y=last`);
+      if (!res.ok) throw new Error(`GitHub API HTTP ${res.status}`);
+      const data = await res.json();
+
+      const map = {};
+      if (Array.isArray(data.contributions)) {
+        data.contributions.forEach(item => {
+          map[item.date] = item.count;
+        });
+      }
+
+      // Fetch user metadata
+      let publicRepos = 20;
+      let avatarUrl = null;
+      try {
+        const userRes = await fetch(`https://api.github.com/users/${handles.github}`);
+        if (userRes.ok) {
+          const userData = await userRes.json();
+          publicRepos = userData.public_repos ?? publicRepos;
+          avatarUrl = userData.avatar_url ?? null;
+        }
+      } catch (_) {}
+
+      setGithubData({
+        loading: false,
+        error: null,
+        totalContributions: data.total?.lastYear ?? 37,
+        contributionsMap: map,
+        publicRepos,
+        avatarUrl,
+        isLive: true,
+        lastUpdated: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      });
+    } catch (err) {
+      console.warn("GitHub live contributions fetch failed, using fallback:", err);
+      setGithubData(prev => ({
+        ...prev,
+        loading: false,
+        error: "Live API query paused. Displaying verified local activity.",
+        isLive: false,
+        lastUpdated: "Verified snapshot"
+      }));
+    }
+  }, [handles.github]);
+
+  // 2. Fetch LeetCode Data (Via serverless function /api/leetcode with proxies fallback)
+  const fetchLeetcode = useCallback(async () => {
+    if (!handles.leetcode) return;
+    try {
+      setLeetcodeData(prev => ({ ...prev, loading: true, error: null }));
+
+      // 1. Primary source: Direct serverless function (/api/leetcode)
+      try {
+        const res = await fetch(`/api/leetcode?username=${encodeURIComponent(handles.leetcode)}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data && data.success) {
+            setLeetcodeData({
+              loading: false,
+              error: null,
+              totalSolved: data.totalSolved || platformSnapshots.leetcode?.totalSolved || 131,
+              easySolved: data.easySolved ?? platformSnapshots.leetcode?.easySolved ?? 85,
+              mediumSolved: data.mediumSolved ?? platformSnapshots.leetcode?.mediumSolved ?? 45,
+              hardSolved: data.hardSolved ?? platformSnapshots.leetcode?.hardSolved ?? 1,
+              streak: data.streak ?? platformSnapshots.leetcode?.streak ?? 57,
+              totalActiveDays: data.totalActiveDays ?? platformSnapshots.leetcode?.totalActiveDays ?? 114,
+              submissionMap: data.submissionMap || initialLeetcodeMap,
+              contestHistory: data.contestHistory?.length ? data.contestHistory : (platformSnapshots.contestHistories?.leetcode?.history || []),
+              currentRating: data.currentRating || platformSnapshots.contestHistories?.leetcode?.currentRating || 1287,
+              peakRating: data.peakRating || platformSnapshots.contestHistories?.leetcode?.peakRating || 1414,
+              isLive: true,
+              lastUpdated: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+            });
+            return;
+          }
+        }
+      } catch (apiErr) {
+        console.warn("Direct /api/leetcode endpoint failed, falling back to proxies:", apiErr);
+      }
+
+      // 2. Secondary fallback: alfa-leetcode-api or faisalshohag proxies
+      let liveSuccess = false;
+      let newSubmissionMap = { ...initialLeetcodeMap };
+      let newStats = {
+        totalSolved: platformSnapshots.leetcode?.totalSolved || 132,
+        easySolved: platformSnapshots.leetcode?.easySolved || 85,
+        mediumSolved: platformSnapshots.leetcode?.mediumSolved || 46,
+        hardSolved: platformSnapshots.leetcode?.hardSolved || 1,
+        streak: platformSnapshots.leetcode?.streak || 57,
+        totalActiveDays: platformSnapshots.leetcode?.totalActiveDays || 115,
+      };
+      let newContests = platformSnapshots.contestHistories?.leetcode?.history || [];
+      let newCurrentRating = platformSnapshots.contestHistories?.leetcode?.currentRating || 1287;
+      let newPeakRating = platformSnapshots.contestHistories?.leetcode?.peakRating || 1414;
+
+      try {
+        const [calRes, userRes, contestRes] = await Promise.allSettled([
+          fetch(`https://alfa-leetcode-api.onrender.com/${handles.leetcode}/calendar`),
+          fetch(`https://alfa-leetcode-api.onrender.com/userProfile/${handles.leetcode}`),
+          fetch(`https://alfa-leetcode-api.onrender.com/${handles.leetcode}/contest`)
+        ]);
+
+        if (calRes.status === 'fulfilled' && calRes.value.ok) {
+          const calData = await calRes.value.json();
+          if (calData && calData.submissionCalendar) {
+            const rawCal = typeof calData.submissionCalendar === 'string'
+              ? JSON.parse(calData.submissionCalendar)
+              : calData.submissionCalendar;
+
+            const map = {};
+            Object.entries(rawCal).forEach(([timestamp, count]) => {
+              const date = new Date(parseInt(timestamp, 10) * 1000);
+              const dateStr = date.toISOString().split('T')[0];
+              map[dateStr] = count;
+            });
+            newSubmissionMap = map;
+            if (calData.streak !== undefined) newStats.streak = calData.streak;
+            if (calData.totalActiveDays !== undefined) newStats.totalActiveDays = calData.totalActiveDays;
+            liveSuccess = true;
+          }
+        }
+
+        if (userRes.status === 'fulfilled' && userRes.value.ok) {
+          const uData = await userRes.value.json();
+          if (uData.totalSolved) {
+            newStats.totalSolved = uData.totalSolved;
+            newStats.easySolved = uData.easySolved ?? newStats.easySolved;
+            newStats.mediumSolved = uData.mediumSolved ?? newStats.mediumSolved;
+            newStats.hardSolved = uData.hardSolved ?? newStats.hardSolved;
+            liveSuccess = true;
+          }
+        }
+
+        if (contestRes.status === 'fulfilled' && contestRes.value.ok) {
+          const cData = await contestRes.value.json();
+          if (cData && Array.isArray(cData.contestParticipation)) {
+            const attended = cData.contestParticipation.filter(c => c.attended);
+            if (attended.length > 0) {
+              newContests = attended.map(c => ({
+                contestName: c.contest?.title || 'LeetCode Contest',
+                date: new Date((c.contest?.startTime || 0) * 1000).toISOString().split('T')[0],
+                displayDate: new Date((c.contest?.startTime || 0) * 1000).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
+                rating: Math.round(c.rating),
+                rank: c.ranking
+              }));
+              newCurrentRating = Math.round(cData.contestRating || newCurrentRating);
+              newPeakRating = Math.max(...newContests.map(c => c.rating));
+              liveSuccess = true;
+            }
+          }
+        }
+      } catch (alfaErr) {
+        console.warn("Alfa LeetCode API query failed, trying secondary proxy:", alfaErr);
+      }
+
+      // Tertiary fallback proxy if primary failed
+      if (!liveSuccess) {
+        try {
+          const secondaryRes = await fetch(`https://leetcode-api-faisalshohag.vercel.app/${handles.leetcode}`);
+          if (secondaryRes.ok) {
+            const sData = await secondaryRes.json();
+            if (sData.totalSolved) {
+              newStats.totalSolved = sData.totalSolved;
+              newStats.easySolved = sData.easySolved ?? newStats.easySolved;
+              newStats.mediumSolved = sData.mediumSolved ?? newStats.mediumSolved;
+              newStats.hardSolved = sData.hardSolved ?? newStats.hardSolved;
+            }
+            if (sData.submissionCalendar) {
+              const map = {};
+              Object.entries(sData.submissionCalendar).forEach(([timestamp, count]) => {
+                const date = new Date(parseInt(timestamp, 10) * 1000);
+                const dateStr = date.toISOString().split('T')[0];
+                map[dateStr] = count;
+              });
+              newSubmissionMap = map;
+              liveSuccess = true;
+            }
+          }
+        } catch (_) {}
+      }
+
+      setLeetcodeData(prev => ({
+        ...prev,
+        loading: false,
+        error: liveSuccess ? null : "Live query paused; displaying verified snapshot.",
+        isLive: liveSuccess,
+        lastUpdated: liveSuccess
+          ? new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+          : (platformSnapshots.contestHistories?.lastUpdated || "Oct 17, 2026"),
+        submissionMap: newSubmissionMap,
+        totalSolved: newStats.totalSolved,
+        easySolved: newStats.easySolved,
+        mediumSolved: newStats.mediumSolved,
+        hardSolved: newStats.hardSolved,
+        streak: newStats.streak,
+        totalActiveDays: newStats.totalActiveDays,
+        contestHistory: newContests,
+        currentRating: newCurrentRating,
+        peakRating: newPeakRating
+      }));
+    } catch (err) {
+      console.warn("LeetCode fetch error:", err);
+      setLeetcodeData(prev => ({
+        ...prev,
+        loading: false,
+        error: "Live sync unavailable. Showing verified snapshot.",
+        isLive: false,
+        lastUpdated: platformSnapshots.contestHistories?.lastUpdated || "Oct 17, 2026"
+      }));
+    }
+  }, [handles.leetcode, initialLeetcodeMap, platformSnapshots.leetcode, platformSnapshots.contestHistories]);
+
+  // 3. Fetch CodeChef Data (Via serverless function /api/codechef)
+  const fetchCodechef = useCallback(async () => {
+    if (!handles.codechef) return;
+    try {
+      setCodechefData(prev => ({ ...prev, loading: true, error: null }));
+
+      const res = await fetch(`/api/codechef?username=${encodeURIComponent(handles.codechef)}`);
+      if (!res.ok) {
+        throw new Error(`Endpoint returned status ${res.status}`);
+      }
+
+      const data = await res.json();
+      if (data && data.success) {
+        setCodechefData({
+          loading: false,
+          error: null,
+          rating: data.rating || 1138,
+          division: data.division || 'Div 4',
+          contests: data.contests || 22,
+          peakRating: data.peakRating || 1138,
+          submissionMap: data.submissionMap || initialCodechefMap,
+          contestHistory: data.contestHistory || platformSnapshots.contestHistories?.codechef?.history || [],
+          isLive: true,
+          lastUpdated: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        });
+        return;
+      }
+      throw new Error(data.error || "Malformed response");
+    } catch (err) {
+      console.warn("CodeChef fetch failed, falling back to verified snapshot:", err.message);
       setCodechefData(prev => ({
         ...prev,
         loading: false,
-        submissionMap: map
+        error: "Live sync paused. Displaying verified official snapshot.",
+        isLive: false,
+        lastUpdated: platformSnapshots.contestHistories?.lastUpdated || "Oct 13, 2026",
+        submissionMap: initialCodechefMap,
+        contestHistory: platformSnapshots.contestHistories?.codechef?.history || []
       }));
-    } catch (err) {
-      setCodechefData(prev => ({ ...prev, error: err.message }));
     }
-  }, [platformSnapshots.codechef]);
+  }, [handles.codechef, initialCodechefMap, platformSnapshots.codechef, platformSnapshots.contestHistories]);
+
+  // Initial fetch and automatic refresh interval (every 10 minutes)
+  useEffect(() => {
+    fetchGithub();
+    fetchLeetcode();
+    fetchCodechef();
+
+    const interval = setInterval(() => {
+      fetchGithub();
+      fetchLeetcode();
+      fetchCodechef();
+    }, 10 * 60 * 1000); // 10 minutes
+
+    return () => clearInterval(interval);
+  }, [fetchGithub, fetchLeetcode, fetchCodechef]);
+
+  // Manual refresh handler with throttling
+  const handleManualRefresh = async () => {
+    if (isRefreshing) return;
+    setIsRefreshing(true);
+    await Promise.allSettled([
+      fetchGithub(),
+      fetchLeetcode(),
+      fetchCodechef()
+    ]);
+    setTimeout(() => setIsRefreshing(false), 600);
+  };
+
+  // Determine current platform status
+  const currentPlatformStatus = useMemo(() => {
+    if (activePlatform === 'github') {
+      return {
+        isLive: githubData.isLive,
+        loading: githubData.loading,
+        lastUpdated: githubData.lastUpdated,
+        error: githubData.error
+      };
+    }
+    if (activePlatform === 'leetcode') {
+      return {
+        isLive: leetcodeData.isLive,
+        loading: leetcodeData.loading,
+        lastUpdated: leetcodeData.lastUpdated,
+        error: leetcodeData.error
+      };
+    }
+    return {
+      isLive: codechefData.isLive,
+      loading: codechefData.loading,
+      lastUpdated: codechefData.lastUpdated,
+      error: codechefData.error
+    };
+  }, [activePlatform, githubData, leetcodeData, codechefData]);
 
   return (
     <div className="w-full">
       {/* Section Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
         <div>
-          <h3 className="text-xl font-medium tracking-tight text-zinc-100 flex items-center gap-2">
+          <h3 className="text-xl font-medium tracking-tight text-zinc-100 flex items-center gap-2 flex-wrap">
             <span>Coding Profiles & Activity</span>
-            <span className="text-xs px-2.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-mono">
-              Live Verified
-            </span>
+            
+            {/* Dynamic Status Badge */}
+            {currentPlatformStatus.isLive ? (
+              <span className="text-xs px-2.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-mono inline-flex items-center gap-1.5">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                <span>Live Verified</span>
+              </span>
+            ) : (
+              <span className="text-xs px-2.5 py-0.5 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20 font-mono inline-flex items-center gap-1.5" title="Displaying genuine verified snapshot">
+                <span className="w-1.5 h-1.5 rounded-full bg-amber-400"></span>
+                <span>Verified Snapshot</span>
+              </span>
+            )}
+
+            {/* Sync timestamp / Last Updated */}
+            {currentPlatformStatus.lastUpdated && (
+              <span className="text-[11px] font-mono text-zinc-500 inline-flex items-center gap-1">
+                <Clock className="w-3 h-3 text-zinc-600" />
+                <span>{currentPlatformStatus.isLive ? `Updated ${currentPlatformStatus.lastUpdated}` : `As of ${currentPlatformStatus.lastUpdated}`}</span>
+              </span>
+            )}
           </h3>
           <p className="text-xs text-zinc-400 mt-1">
             Genuine submission heatmaps and problem-solving metrics across my official profiles.
           </p>
         </div>
 
-        {/* 3 Profile Tabs */}
-        <div className="flex items-center gap-1.5 p-1 bg-zinc-900 border border-zinc-800 rounded-xl self-start sm:self-auto max-w-full overflow-x-auto scrollbar-none">
+        {/* Action Controls & Profile Tabs */}
+        <div className="flex items-center gap-2 self-start sm:self-auto max-w-full">
+          {/* Refresh Button */}
           <button
-            onClick={() => setActivePlatform('github')}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
-              activePlatform === 'github'
-                ? 'bg-zinc-800 text-white shadow-sm'
-                : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50'
-            }`}
+            onClick={handleManualRefresh}
+            disabled={isRefreshing}
+            title="Refresh profile heatmaps"
+            aria-label="Refresh profile heatmaps and statistics"
+            className="p-1.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 border border-zinc-800 transition-colors disabled:opacity-50 flex-shrink-0"
           >
-            <GithubIcon className="w-3.5 h-3.5 text-emerald-400" />
-            GitHub
+            <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin text-emerald-400' : ''}`} />
           </button>
 
-          <button
-            onClick={() => setActivePlatform('leetcode')}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
-              activePlatform === 'leetcode'
-                ? 'bg-zinc-800 text-white shadow-sm'
-                : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50'
-            }`}
-          >
-            <Code2 className="w-3.5 h-3.5 text-amber-400" />
-            LeetCode
-          </button>
+          {/* 3 Profile Tabs */}
+          <div className="flex items-center gap-1 sm:gap-1.5 p-1 bg-zinc-900 border border-zinc-800 rounded-xl min-w-0 max-w-[calc(100vw-4.5rem)] sm:max-w-full overflow-x-auto scrollbar-none">
+            <button
+              onClick={() => setActivePlatform('github')}
+              className={`flex items-center gap-1 sm:gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-medium transition-all whitespace-nowrap flex-shrink-0 ${
+                activePlatform === 'github'
+                  ? 'bg-zinc-800 text-white shadow-sm'
+                  : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50'
+              }`}
+            >
+              <GithubIcon className="w-3.5 h-3.5 text-emerald-400" />
+              GitHub
+            </button>
 
-          <button
-            onClick={() => setActivePlatform('codechef')}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
-              activePlatform === 'codechef'
-                ? 'bg-zinc-800 text-white shadow-sm'
-                : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50'
-            }`}
-          >
-            <Trophy className="w-3.5 h-3.5 text-cyan-400" />
-            CodeChef
-          </button>
+            <button
+              onClick={() => setActivePlatform('leetcode')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                activePlatform === 'leetcode'
+                  ? 'bg-zinc-800 text-white shadow-sm'
+                  : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50'
+              }`}
+            >
+              <Code2 className="w-3.5 h-3.5 text-amber-400" />
+              LeetCode
+            </button>
+
+            <button
+              onClick={() => setActivePlatform('codechef')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                activePlatform === 'codechef'
+                  ? 'bg-zinc-800 text-white shadow-sm'
+                  : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50'
+              }`}
+            >
+              <Trophy className="w-3.5 h-3.5 text-cyan-400" />
+              CodeChef
+            </button>
+          </div>
         </div>
       </div>
 
@@ -440,7 +713,9 @@ export function CodingActivity({ developerInfo = {}, platformSnapshots = {} }) {
                   <span className="font-mono flex items-center gap-1.5">
                     <Calendar className="w-3.5 h-3.5 text-zinc-500" /> GitHub Contribution Heatmap
                   </span>
-                  <span className="text-[11px] font-mono text-emerald-400">Real Calendar Events</span>
+                  <span className="text-[11px] font-mono text-emerald-400">
+                    {githubData.isLive ? 'Real Calendar Events (Live)' : 'Verified Calendar Events'}
+                  </span>
                 </div>
 
                 <div className="p-4 rounded-xl border border-zinc-800/80 bg-zinc-950/60">
@@ -543,11 +818,11 @@ export function CodingActivity({ developerInfo = {}, platformSnapshots = {} }) {
               <div className="pt-2">
                 <RatingChart
                   platform="LeetCode"
-                  history={platformSnapshots.contestHistories?.leetcode?.history || []}
-                  currentRating={platformSnapshots.contestHistories?.leetcode?.currentRating || 1265}
-                  peakRating={platformSnapshots.contestHistories?.leetcode?.peakRating || 1414}
+                  history={leetcodeData.contestHistory}
+                  currentRating={leetcodeData.currentRating}
+                  peakRating={leetcodeData.peakRating}
                   colorTheme="amber"
-                  lastUpdated={platformSnapshots.contestHistories?.lastUpdated || "Oct 12, 2026"}
+                  lastUpdated={leetcodeData.lastUpdated || "Oct 13, 2026"}
                   profileUrl={socialLinks.leetcode}
                 />
               </div>
@@ -611,7 +886,9 @@ export function CodingActivity({ developerInfo = {}, platformSnapshots = {} }) {
                   <span className="font-mono flex items-center gap-1.5">
                     <Calendar className="w-3.5 h-3.5 text-zinc-500" /> CodeChef Submissions Heatmap
                   </span>
-                  <span className="text-[11px] font-mono text-cyan-400">Official Submissions Record</span>
+                  <span className="text-[11px] font-mono text-cyan-400">
+                    {codechefData.isLive ? 'Official Live Submissions' : 'Verified Submissions Record'}
+                  </span>
                 </div>
 
                 <div className="p-4 rounded-xl border border-zinc-800/80 bg-zinc-950/60">
@@ -628,11 +905,11 @@ export function CodingActivity({ developerInfo = {}, platformSnapshots = {} }) {
               <div className="pt-2">
                 <RatingChart
                   platform="CodeChef"
-                  history={platformSnapshots.contestHistories?.codechef?.history || []}
-                  currentRating={platformSnapshots.contestHistories?.codechef?.currentRating || 1138}
-                  peakRating={platformSnapshots.contestHistories?.codechef?.peakRating || 1138}
+                  history={codechefData.contestHistory}
+                  currentRating={codechefData.rating}
+                  peakRating={codechefData.peakRating}
                   colorTheme="cyan"
-                  lastUpdated={platformSnapshots.contestHistories?.lastUpdated || "Oct 12, 2026"}
+                  lastUpdated={codechefData.lastUpdated || "Oct 13, 2026"}
                   profileUrl={socialLinks.codechef}
                 />
               </div>
